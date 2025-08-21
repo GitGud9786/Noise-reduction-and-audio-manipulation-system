@@ -1,0 +1,2 @@
+Must use this intrepreter in both IDE and Terminal:
+ conda activate noise_reduction
