@@ -1,244 +1,265 @@
 import numpy as np
-import scipy.signal as signal
 from scipy.io import wavfile
+import scipy.signal as signal
+import os
 import matplotlib.pyplot as plt
 
-class OldSchoolRadioFilter:
+# ========================= EFFECTS CLASS =========================
+
+def plot_filter_response(original, filtered, sample_rate, title="Filter Response"):
+    """
+    Plot time domain and frequency domain comparison
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+
+    # Time domain (first 1000 samples)
+    time_orig = np.arange(len(original)) / sample_rate
+    time_filt = np.arange(len(filtered)) / sample_rate
+
+    axes[0, 0].plot(time_orig[:1000], original[:1000])
+    axes[0, 0].set_title("Original Signal (Time)")
+    axes[0, 0].set_xlabel("Time (s)")
+    axes[0, 0].set_ylabel("Amplitude")
+
+    axes[0, 1].plot(time_filt[:1000], filtered[:1000])
+    axes[0, 1].set_title("Filtered Signal (Time)")
+    axes[0, 1].set_xlabel("Time (s)")
+    axes[0, 1].set_ylabel("Amplitude")
+
+    # Frequency domain
+    fft_orig = np.fft.fft(original)
+    fft_filt = np.fft.fft(filtered)
+    freqs = np.fft.fftfreq(len(original), 1 / sample_rate)
+    n = len(freqs) // 2  # positive freqs only
+
+    axes[1, 0].plot(freqs[:n], 20 * np.log10(np.abs(fft_orig[:n]) + 1e-10))
+    axes[1, 0].set_title("Original Spectrum")
+    axes[1, 0].set_xlabel("Frequency (Hz)")
+    axes[1, 0].set_ylabel("Magnitude (dB)")
+    axes[1, 0].grid(True)
+
+    axes[1, 1].plot(freqs[:n], 20 * np.log10(np.abs(fft_filt[:n]) + 1e-10))
+    axes[1, 1].set_title("Filtered Spectrum")
+    axes[1, 1].set_xlabel("Frequency (Hz)")
+    axes[1, 1].set_ylabel("Magnitude (dB)")
+    axes[1, 1].grid(True)
+
+    plt.suptitle(title)
+    plt.tight_layout()
+    plt.show()
+
+class SimpleAudioFilters:
     def __init__(self, sample_rate):
         self.sample_rate = sample_rate
-        
-    def apply_bandpass_filter(self, audio_data, low_freq=300, high_freq=3400):
+
+    def low_pass_filter(self, audio_data, cutoff_freq=1000):
         """
-        Apply bandpass filter to simulate limited frequency response of old radios
-        Old radios typically had frequency response between 300Hz - 3400Hz
+        Low-pass filter: Removes high frequencies (makes sound muffled)
+        Good for: Telephone effect, underwater effect, removing hiss
         """
         nyquist = self.sample_rate / 2
-        low = low_freq / nyquist
-        high = high_freq / nyquist
-        
-        # Design Butterworth bandpass filter
-        b, a = signal.butter(4, [low, high], btype='band')
-        filtered_audio = signal.filtfilt(b, a, audio_data)
-        
-        return filtered_audio
+        normalized_cutoff = cutoff_freq / nyquist
+        b, a = signal.butter(4, normalized_cutoff, btype='low')
+        return signal.filtfilt(b, a, audio_data)
     
-    def add_tube_distortion(self, audio_data, gain=2.0, threshold=0.7):
+    def high_pass_filter(self, audio_data, cutoff_freq=300):
         """
-        Simulate tube amplifier distortion characteristic of old radios
+        High-pass filter: Removes low frequencies (makes sound thin/tinny)
+        Good for: Removing rumble, making voice sound like intercom
         """
-        # Amplify signal
-        amplified = audio_data * gain
-        
-        # Apply soft clipping (tube-like distortion)
-        distorted = np.tanh(amplified)
-        
-        # Add some harmonic distortion
-        distorted = distorted + 0.1 * np.sin(2 * np.pi * amplified)
-        
-        return distorted
+        nyquist = self.sample_rate / 2
+        normalized_cutoff = cutoff_freq / nyquist
+        b, a = signal.butter(4, normalized_cutoff, btype='high')
+        return signal.filtfilt(b, a, audio_data)
     
-    def add_crackle_noise(self, audio_data, intensity=0.02):
-        """
-        Add crackle noise to simulate old radio static
-        """
-        # Generate random impulses for crackling
-        crackle_rate = 0.001  # Probability of crackle per sample
-        crackles = np.random.random(len(audio_data)) < crackle_rate
-        crackle_noise = crackles * np.random.normal(0, intensity, len(audio_data))
-        
-        return audio_data + crackle_noise
+    # ========================= DELAY-BASED EFFECTS =========================
     
-    def add_hum(self, audio_data, hum_freq=50, intensity=0.01):
+    def echo_effect(self, audio_data, delay_ms=500, decay=0.5):
         """
-        Add 50Hz hum typical of old electrical equipment
+        Echo effect: Adds delayed copy of signal
+        Uses simple delay line - fundamental DSP concept
+        """
+        # Convert delay from milliseconds to samples
+        delay_samples = int(delay_ms * self.sample_rate / 1000)
+        
+        # Create output array (longer to accommodate echo tail)
+        output = np.zeros(len(audio_data) + delay_samples)
+        
+        # Copy original signal
+        output[:len(audio_data)] = audio_data
+        
+        # Add delayed signal
+        output[delay_samples:delay_samples + len(audio_data)] += audio_data * decay
+        
+        # Trim back to original length if desired, or keep extended
+        return output[:len(audio_data)]
+    # ========================= FREQUENCY DOMAIN EFFECTS =========================
+    
+    def pitch_shift(self, audio_data, pitch_factor=1.2):
+        """
+        Pitch shift using FFT (phase vocoder technique)
+        pitch_factor > 1: higher pitch, < 1: lower pitch
+        """
+        # Simple pitch shift using resampling (changes duration)
+        # For time-preserving pitch shift, you'd need phase vocoder
+        
+        # Resample to change pitch
+        original_length = len(audio_data)
+        new_length = int(original_length / pitch_factor)
+        
+        # Use scipy's resampling
+        resampled = signal.resample(audio_data, new_length)
+        
+        # Pad or trim to original length
+        if len(resampled) > original_length:
+            return resampled[:original_length]
+        else:
+            padded = np.zeros(original_length)
+            padded[:len(resampled)] = resampled
+            return padded
+    
+    # ========================= MODULATION EFFECTS =========================
+    
+    def tremolo_effect(self, audio_data, rate=5, depth=0.5):
+        """
+        Tremolo: Amplitude modulation (volume fluctuation)
+        Classic guitar effect
         """
         t = np.arange(len(audio_data)) / self.sample_rate
-        hum = intensity * np.sin(2 * np.pi * hum_freq * t)
-        
-        return audio_data + hum
-    
-    def apply_amplitude_modulation(self, audio_data, mod_freq=0.5, mod_depth=0.1):
-        """
-        Apply slight amplitude modulation to simulate power supply variations
-        """
-        t = np.arange(len(audio_data)) / self.sample_rate
-        modulation = 1 + mod_depth * np.sin(2 * np.pi * mod_freq * t)
-        
+        modulation = 1 + depth * np.sin(2 * np.pi * rate * t)
         return audio_data * modulation
     
-    def compress_dynamic_range(self, audio_data, ratio=4.0, threshold=0.3):
+    def ring_modulation(self, audio_data, carrier_freq=440):
         """
-        Apply compression to simulate limited dynamic range of old radios
+        Ring modulation: Multiplies signal by sine wave
+        Creates metallic, robotic sounds
         """
-        # Simple compression algorithm
-        compressed = np.copy(audio_data)
-        
-        # Find samples above threshold
-        above_threshold = np.abs(compressed) > threshold
-        
-        # Apply compression to samples above threshold
-        compressed[above_threshold] = threshold + (compressed[above_threshold] - threshold) / ratio
-        
-        return compressed
+        t = np.arange(len(audio_data)) / self.sample_rate
+        carrier = np.sin(2 * np.pi * carrier_freq * t)
+        return audio_data * carrier
     
-    def apply_radio_filter(self, audio_data, 
-                          bandpass_params={'low_freq': 300, 'high_freq': 3400},
-                          distortion_params={'gain': 1.8, 'threshold': 0.7},
-                          noise_params={'crackle_intensity': 0.015, 'hum_intensity': 0.008},
-                          modulation_params={'mod_freq': 0.3, 'mod_depth': 0.05},
-                          compression_params={'ratio': 3.0, 'threshold': 0.4}):
-        """
-        Apply complete old-school radio filter chain
-        """
-        print("Applying old-school radio filter...")
-        
-        # Step 1: Bandpass filter (most important for radio sound)
-        print("1. Applying bandpass filter...")
-        filtered_audio = self.apply_bandpass_filter(audio_data, **bandpass_params)
-        
-        # Step 2: Add tube distortion
-        print("2. Adding tube distortion...")
-        filtered_audio = self.add_tube_distortion(filtered_audio, **distortion_params)
-        
-        # Step 3: Compress dynamic range
-        print("3. Applying compression...")
-        filtered_audio = self.compress_dynamic_range(filtered_audio, **compression_params)
-        
-        # Step 4: Add amplitude modulation
-        print("4. Adding amplitude modulation...")
-        filtered_audio = self.apply_amplitude_modulation(filtered_audio, **modulation_params)
-        
-        # Step 5: Add electrical hum
-        print("5. Adding electrical hum...")
-        filtered_audio = self.add_hum(filtered_audio, 50, noise_params['hum_intensity'])
-        
-        # Step 6: Add crackle noise
-        print("6. Adding crackle noise...")
-        filtered_audio = self.add_crackle_noise(filtered_audio, noise_params['crackle_intensity'])
-        
-        # Normalize to prevent clipping
-        max_val = np.max(np.abs(filtered_audio))
-        if max_val > 1.0:
-            filtered_audio = filtered_audio / max_val * 0.95
-        
-        print("Radio filter applied successfully!")
-        return filtered_audio
+    # ========================= DISTORTION EFFECTS =========================
     
-    def plot_frequency_response(self, original_audio, filtered_audio):
+    def hard_clipping(self, audio_data, threshold=0.1):
         """
-        Plot frequency domain comparison between original and filtered audio
+        Hard clipping distortion: Sharp cutoff at threshold
+        Creates harsh, digital distortion
         """
-        # Compute FFT
-        fft_original = np.fft.fft(original_audio)
-        fft_filtered = np.fft.fft(filtered_audio)
+        return np.clip(audio_data, -threshold, threshold)
+    
+    # ========================= SPECIALIZED FILTERS =========================
+    
+    def telephone_filter(self, audio_data):
+        """
+        Telephone effect: Bandpass + distortion + noise
+        Combines multiple techniques
+        """
+        # Narrow bandpass (300-3400 Hz like old phones)
+        filtered = self.low_pass_filter(
+            self.high_pass_filter(audio_data, 300), 3400)
         
-        # Frequency bins
-        freqs = np.fft.fftfreq(len(original_audio), 1/self.sample_rate)
+        # Add slight distortion
+        distorted = np.tanh(filtered * 2) * 0.7
         
-        # Plot magnitude spectrum (first half only due to symmetry)
-        n = len(freqs) // 2
+        # Add noise
+        noise = np.random.normal(0, 0.01, len(distorted))
         
-        plt.figure(figsize=(12, 8))
-        
-        plt.subplot(2, 1, 1)
-        plt.plot(freqs[:n], 20 * np.log10(np.abs(fft_original[:n]) + 1e-10))
-        plt.title('Original Audio - Frequency Spectrum')
-        plt.xlabel('Frequency (Hz)')
-        plt.ylabel('Magnitude (dB)')
-        plt.grid(True)
-        
-        plt.subplot(2, 1, 2)
-        plt.plot(freqs[:n], 20 * np.log10(np.abs(fft_filtered[:n]) + 1e-10))
-        plt.title('Radio Filtered Audio - Frequency Spectrum')
-        plt.xlabel('Frequency (Hz)')
-        plt.ylabel('Magnitude (dB)')
-        plt.grid(True)
-        
-        plt.tight_layout()
-        plt.show()
+        return distorted + noise
 
-def process_audio_file(input_file, output_file, plot_spectrum=True):
-    """
-    Main function to process an audio file with radio filter
-    """
-    try:
-        # Read audio file
-        print(f"Reading audio file: {input_file}")
-        sample_rate, audio_data = wavfile.read(input_file)
-        
-        # Convert to float and normalize
-        if audio_data.dtype == np.int16:
-            audio_data = audio_data.astype(np.float32) / 32768.0
-        elif audio_data.dtype == np.int32:
-            audio_data = audio_data.astype(np.float32) / 2147483648.0
-        
-        # Handle stereo audio (convert to mono for simplicity)
-        if len(audio_data.shape) > 1:
-            audio_data = np.mean(audio_data, axis=1)
-        
-        print(f"Sample rate: {sample_rate} Hz")
-        print(f"Duration: {len(audio_data) / sample_rate:.2f} seconds")
-        
-        # Create filter instance
-        radio_filter = OldSchoolRadioFilter(sample_rate)
-        
-        # Apply radio filter
-        filtered_audio = radio_filter.apply_radio_filter(audio_data)
-        
-        # Plot frequency response comparison
-        if plot_spectrum:
-            radio_filter.plot_frequency_response(audio_data, filtered_audio)
-        
-        # Convert back to int16 for saving
-        filtered_audio_int16 = (filtered_audio * 32767).astype(np.int16)
-        
-        # Save filtered audio
-        wavfile.write(output_file, sample_rate, filtered_audio_int16)
-        print(f"Filtered audio saved to: {output_file}")
-        
-        return filtered_audio, sample_rate
-        
-    except Exception as e:
-        print(f"Error processing audio file: {str(e)}")
-        return None, None
 
-# Example usage
+# ========================= HELPER =========================
+def _to_float32(x):
+    """Convert PCM or float to float32 in [-1, 1]."""
+    if x.dtype == np.int16:
+        return x.astype(np.float32) / 32768.0
+    if x.dtype == np.int32:
+        return x.astype(np.float32) / 2147483648.0
+    if x.dtype == np.uint8:
+        return (x.astype(np.float32) - 128.0) / 128.0
+    return x.astype(np.float32)
+
+def _from_float32(x_float, dtype=np.int16):
+    """Convert float32 in [-1, 1] to desired PCM dtype (default int16)."""
+    x = np.clip(x_float, -1.0, 1.0)
+    if dtype == np.int16:
+        return (x * 32767.0).astype(np.int16)
+    if dtype == np.int32:
+        return (x * 2147483647.0).astype(np.int32)
+    if dtype == np.uint8:
+        return (np.round((x * 127.0) + 128.0)).astype(np.uint8)
+    return x.astype(dtype)
+
+def _apply_channelwise(effect_fn, audio_float):
+    """Apply effect to mono or each channel of a stereo/multi-channel signal."""
+    if audio_float.ndim == 1:
+        return effect_fn(audio_float)
+    # For multi-channel: process each channel independently
+    processed = np.empty_like(audio_float)
+    for c in range(audio_float.shape[1]):
+        processed[:, c] = effect_fn(audio_float[:, c])
+    return processed
+
+# ========================= MAIN (ONE EFFECT ONLY) =========================
 if __name__ == "__main__":
-    # Example file paths - modify these for your actual files
-    input_file = "input_audio.wav"  # Your input audio file
-    output_file = "radio_filtered_audio.wav"  # Output file
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    INPUT_WAV = os.path.join(SCRIPT_DIR, "input_audio.wav")
+    OUTPUT_WAV = os.path.join(SCRIPT_DIR, "output_filtered.wav") # <- set your output file name
     
-    # Process the audio file
-    filtered_audio, sample_rate = process_audio_file(input_file, output_file, plot_spectrum=True)
     
-    if filtered_audio is not None:
-        print("\n" + "="*50)
-        print("OLD SCHOOL RADIO FILTER APPLIED SUCCESSFULLY!")
-        print("="*50)
-        print("\nFilter characteristics applied:")
-        print("✓ Bandpass filter (300Hz - 3400Hz)")
-        print("✓ Tube amplifier distortion")
-        print("✓ Dynamic range compression")
-        print("✓ Amplitude modulation")
-        print("✓ 50Hz electrical hum")
-        print("✓ Crackle noise")
-        print(f"\nOutput saved to: {output_file}")
-    else:
-        print("Failed to process audio file. Please check your input file path and format.")
-        
-    # You can also create a custom filter with different parameters
-    print("\n" + "-"*40)
-    print("Custom filter example:")
-    print("-"*40)
-    
-    # Example with custom parameters for a more aggressive radio effect
-    custom_params = {
-        'bandpass_params': {'low_freq': 400, 'high_freq': 2800},  # Even more limited bandwidth
-        'distortion_params': {'gain': 2.5, 'threshold': 0.6},    # More distortion
-        'noise_params': {'crackle_intensity': 0.03, 'hum_intensity': 0.015},  # More noise
-        'modulation_params': {'mod_freq': 0.8, 'mod_depth': 0.08},  # More modulation
-        'compression_params': {'ratio': 5.0, 'threshold': 0.3}   # More compression
-    }
-    
-    print("To use custom parameters, modify the 'custom_params' dictionary above")
-    print("and call: radio_filter.apply_radio_filter(audio_data, **custom_params)")
+
+    sample_rate, audio = wavfile.read(INPUT_WAV)
+    original_dtype = audio.dtype
+
+    audio_f32 = _to_float32(audio)
+    fx = SimpleAudioFilters(sample_rate)
+
+    # ---- CHOOSE EXACTLY ONE EFFECT (no ifs) ----
+    # Example: low-pass @ 1200 Hz. Change this ONE line to switch effects.
+    print("What type of filter do you want?\n" \
+    "Echo Effect (0)\n" \
+    "Pitch Shift (1)\n" \
+    "Tremolo Effect (2)\n" \
+    "Ring Modulation (3)\n" \
+    "Hard Clipping Distortion (4)\n" \
+    "Telephone Filter (5)\n")
+
+
+    answer = int(input("Enter a number (0-5): ").strip())
+    print
+    chosen_effect = None
+    if answer == 0:
+        delay = int(input("What should be the delay in millisecons?"))
+        chosen_effect = lambda x: fx.echo_effect(x, delay_ms=delay)
+    elif answer == 1:
+        factor = float(input("What should be the pitch factor?"))
+        chosen_effect = lambda x: fx.pitch_shift(x, pitch_factor=factor)
+    elif answer == 2:
+        rate = int(input("What should be the rate?"))
+        depth = float(input("What should be the depth?"))
+        chosen_effect = lambda x: fx.tremolo_effect(x, rate=rate, depth=depth)
+    elif answer == 3:
+        freq = int(input("What should be the carrier frequency?"))
+        chosen_effect = lambda x: fx.ring_modulation(x, carrier_freq=freq)
+    elif answer == 4:
+        threshold = float(input("What should be the distortion threshold?"))
+        chosen_effect = lambda x: fx.hard_clipping(x, threshold=threshold)  
+    elif answer == 5:
+        chosen_effect = lambda x: fx.telephone_filter(x)  
+
+    if chosen_effect is None:
+        raise ValueError("Invalid choice. Please run again and enter a number 0–5.")
+
+    processed = _apply_channelwise(chosen_effect, audio_f32)
+
+    # Optional safety: peak-normalize if anything exceeded 1.0 during processing
+    peak = np.max(np.abs(processed))
+    if peak > 1.0:
+        processed = processed / peak * 0.99
+
+    # Write out (default to int16 for broad compatibility)
+    wavfile.write(OUTPUT_WAV, sample_rate, _from_float32(processed, dtype=np.int16))
+    print(f"Done. Wrote: {OUTPUT_WAV}")
+    plot_filter_response(audio_f32 if audio_f32.ndim == 1 else audio_f32[:,0],
+                     processed if processed.ndim == 1 else processed[:,0],
+                     sample_rate,
+                     title=f"Effect {answer} Response")
